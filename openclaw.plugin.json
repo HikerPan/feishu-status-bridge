@@ -14,6 +14,12 @@
         "minimum": 250,
         "default": 1500
       },
+      "maxHistoryItems": {
+        "type": "integer",
+        "minimum": 0,
+        "default": 0,
+        "description": "Maximum number of recent history rows to keep. Use 0 to keep all rows for the current run."
+      },
       "includeToolNames": {
         "type": "boolean",
         "default": true

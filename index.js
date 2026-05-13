@@ -4,7 +4,6 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 const PLUGIN_ID = "feishu-status-bridge";
-const MAX_HISTORY = 4;
 
 let feishuSendModulePromise;
 
@@ -53,6 +52,7 @@ function resolveConfig(api, event) {
       750,
       typeof cfg.minUpdateIntervalMs === "number" ? cfg.minUpdateIntervalMs : 1500
     ),
+    maxHistoryItems: Number.isInteger(cfg.maxHistoryItems) && cfg.maxHistoryItems > 0 ? cfg.maxHistoryItems : 0,
     includeToolNames: cfg.includeToolNames !== false
   };
 }
@@ -152,12 +152,14 @@ function stateFor(states, sessionKey, ctx = {}) {
   return state;
 }
 
-function pushHistory(state, text) {
+function pushHistory(state, text, maxHistoryItems = 0) {
   const normalized = clip(text, 96);
   if (!normalized) return;
   if (state.history[state.history.length - 1] === normalized) return;
   state.history.push(normalized);
-  while (state.history.length > MAX_HISTORY) state.history.shift();
+  if (maxHistoryItems > 0) {
+    while (state.history.length > maxHistoryItems) state.history.shift();
+  }
 }
 
 function setCurrent(state, kind, detail) {
@@ -275,7 +277,7 @@ function formatStatus(state) {
   ].filter(Boolean).join("\n");
 }
 
-function completeTool(state, event) {
+function completeTool(state, event, cfg) {
   const id = event?.toolCallId;
   const started = id ? state.activeTools.get(id) : undefined;
   const label = started?.label || summarizeTool(event);
@@ -285,7 +287,7 @@ function completeTool(state, event) {
   const duration = typeof event?.durationMs === "number" ? ` (${(event.durationMs / 1000).toFixed(1)}s)` : "";
   const icon = event?.error ? "❌" : "✅";
   const mark = event?.error ? "✗" : "✓";
-  pushHistory(state, `${icon} ${label}${duration} ${mark}`);
+  pushHistory(state, `${icon} ${label}${duration} ${mark}`, cfg.maxHistoryItems);
 }
 
 function statusTemplate(status) {
@@ -490,9 +492,10 @@ export default {
     api.on("after_tool_call", async (event, ctx) => {
       const sessionKey = ctx?.sessionKey;
       if (!parseFeishuDirectSessionKey(sessionKey)) return;
+      const cfg = resolveConfig(api, event);
       const state = stateFor(states, sessionKey, ctx);
       state.status = event?.error ? "工具报错" : "继续处理";
-      completeTool(state, event);
+      completeTool(state, event, cfg);
       if (state.activeTools.size === 0) {
         setCurrent(state, event?.error ? "error" : "thinking", event?.error ? clip(event.error, 96) : "waiting for next step");
       }
@@ -511,9 +514,10 @@ export default {
     api.on("after_compaction", async (event, ctx) => {
       const sessionKey = ctx?.sessionKey;
       if (!parseFeishuDirectSessionKey(sessionKey)) return;
+      const cfg = resolveConfig(api, event);
       const state = stateFor(states, sessionKey, ctx);
       state.status = "恢复处理";
-      pushHistory(state, "compact ✓");
+      pushHistory(state, "compact ✓", cfg.maxHistoryItems);
       setCurrent(state, "model", "resuming");
       await publish(api, states, ctx, event, { force: true });
     }, { timeoutMs: 10000 });

@@ -12,6 +12,7 @@ The display style is inspired by Hermes Agent: short, action-oriented, icon-led,
 - One card is edited in place instead of spamming the chat.
 - Shows the active phase under `📍 当前`.
 - Shows recent tool actions under `🧭 最近`, one action per line.
+- Keeps all recent history rows by default for the current run, with an optional cap if you prefer shorter cards.
 - Adds icons for common tools such as terminal, web search, browser, image generation, memory, and Feishu docs.
 - Marks completed and failed tool calls with clear `✓` / `✗` indicators.
 - Throttles updates to avoid hitting Feishu rate limits.
@@ -62,6 +63,7 @@ Add the plugin to `~/.openclaw/openclaw.json`:
         "config": {
           "enabled": true,
           "minUpdateIntervalMs": 2500,
+          "maxHistoryItems": 0,
           "includeToolNames": true
         },
         "hooks": {
@@ -101,9 +103,12 @@ systemctl --user restart openclaw-gateway.service
 | --- | ---: | --- |
 | `enabled` | `true` | Enables or disables status card publishing. |
 | `minUpdateIntervalMs` | `1500` | Minimum interval between card updates. The example config uses `2500` for fewer edits. |
+| `maxHistoryItems` | `0` | Maximum number of `🧭 最近` rows to keep. `0` means keep all rows for the current run. |
 | `includeToolNames` | `true` | Reserved for display customization. |
 
 The plugin only publishes cards for Feishu direct chats. Group chats and non-Feishu sessions are ignored.
+
+For very long tasks, consider setting `maxHistoryItems` to a positive number such as `20` or `50` to reduce Feishu card size.
 
 ## Runtime Discovery
 
@@ -172,6 +177,16 @@ Increase `minUpdateIntervalMs`:
 ### Tool lines are too verbose
 
 The plugin intentionally clips tool arguments. If a specific tool is still noisy, add a custom mapping in `summarizeTool()`.
+
+### The recent history section is too long
+
+Limit the number of `🧭 最近` rows:
+
+```json
+{
+  "maxHistoryItems": 20
+}
+```
 
 ## Security Notes
 
