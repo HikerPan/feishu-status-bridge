@@ -10,8 +10,8 @@ The display style is inspired by Hermes Agent: short, action-oriented, icon-led,
 
 - Live Feishu status card per agent run.
 - One card is edited in place instead of spamming the chat.
-- Shows the active phase under `当前`.
-- Shows recent tool actions under `最近`, one action per line.
+- Shows the active phase under `📍 当前`.
+- Shows recent tool actions under `🧭 最近`, one action per line.
 - Adds icons for common tools such as terminal, web search, browser, image generation, memory, and Feishu docs.
 - Marks completed and failed tool calls with clear `✓` / `✗` indicators.
 - Throttles updates to avoid hitting Feishu rate limits.
@@ -22,9 +22,9 @@ Example status text:
 ```text
 OpenClaw 调用工具 · 14s · openai-codex/gpt-5.5
 任务: 请帮我修复这个问题
-当前:
+📍 当前:
 ⚡ tool: 🖥️ exec_command("npm test")
-最近:
+🧭 最近:
 ✅ 🔎 tavily_search("OpenClaw plugin hooks") (1.3s) ✓
 ✅ 🖥️ exec_command("node --check index.js") (0.1s) ✓
 ```
@@ -190,4 +190,3 @@ The code is dependency-free and uses only Node.js built-ins plus OpenClaw's runt
 ## License
 
 MIT
-

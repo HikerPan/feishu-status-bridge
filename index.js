@@ -261,10 +261,10 @@ function formatStatus(state) {
   ].filter(Boolean);
 
   const currentLine = state.current
-    ? `当前:\n${iconForKind(state.current.kind)} ${state.current.kind}: ${state.current.detail}`
-    : "当前:\n• 等待运行事件";
+    ? `📍 当前:\n${iconForKind(state.current.kind)} ${state.current.kind}: ${state.current.detail}`
+    : "📍 当前:\n• 等待运行事件";
   const historyBlock = state.history.length
-    ? ["最近:", ...state.history.map(formatTrailLine)].join("\n")
+    ? ["🧭 最近:", ...state.history.map(formatTrailLine)].join("\n")
     : undefined;
 
   return [
