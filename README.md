@@ -1,20 +1,51 @@
 # Feishu Status Bridge
 
-OpenClaw plugin that posts one live Feishu status card for each direct-chat run, then edits the same card as the agent thinks, calls tools, compacts context, and finishes.
+Live OpenClaw run-status cards for Feishu direct chats.
 
-The card is intentionally compact and Hermes-inspired:
+Feishu Status Bridge creates one compact interactive card when an OpenClaw agent starts working from a Feishu direct message, then keeps editing that same card as the run progresses. It is designed to answer a simple but important question: **is the agent actually doing something right now?**
 
-- `当前` shows the active phase.
-- `最近` shows the latest tool/actions, one per line.
-- Tool rows use icons and success/failure marks.
-- Updates are throttled to avoid Feishu spam.
+The display style is inspired by Hermes Agent: short, action-oriented, icon-led, and easy to scan on mobile.
+
+## Features
+
+- Live Feishu status card per agent run.
+- One card is edited in place instead of spamming the chat.
+- Shows the active phase under `当前`.
+- Shows recent tool actions under `最近`, one action per line.
+- Adds icons for common tools such as terminal, web search, browser, image generation, memory, and Feishu docs.
+- Marks completed and failed tool calls with clear `✓` / `✗` indicators.
+- Throttles updates to avoid hitting Feishu rate limits.
+- Works on both macOS and Linux OpenClaw installs by discovering the available Feishu card runtime.
+
+Example status text:
+
+```text
+OpenClaw 调用工具 · 14s · openai-codex/gpt-5.5
+任务: 请帮我修复这个问题
+当前:
+⚡ tool: 🖥️ exec_command("npm test")
+最近:
+✅ 🔎 tavily_search("OpenClaw plugin hooks") (1.3s) ✓
+✅ 🖥️ exec_command("node --check index.js") (0.1s) ✓
+```
+
+## Requirements
+
+- OpenClaw with plugin support.
+- A configured Feishu/Lark channel in OpenClaw.
+- Node.js 20 or newer.
+- Feishu direct-chat session keys in the standard OpenClaw format.
+
+This plugin reuses OpenClaw's existing Feishu card send/edit runtime. It does not implement a separate Feishu SDK client.
 
 ## Install
 
-Copy this directory into:
+Clone or copy this repository into your OpenClaw extensions directory:
 
 ```bash
-~/.openclaw/extensions/feishu-status-bridge
+mkdir -p ~/.openclaw/extensions
+git clone https://github.com/HikerPan/feishu-status-bridge.git \
+  ~/.openclaw/extensions/feishu-status-bridge
 ```
 
 Add the plugin to `~/.openclaw/openclaw.json`:
@@ -58,28 +89,105 @@ Restart OpenClaw:
 openclaw gateway restart
 ```
 
-If OpenClaw runs under systemd:
+If OpenClaw is managed by user systemd:
 
 ```bash
 systemctl --user restart openclaw-gateway.service
 ```
 
-## Runtime Lookup
+## Configuration
 
-The plugin reuses OpenClaw's Feishu card send/edit runtime. It searches:
+| Option | Default | Description |
+| --- | ---: | --- |
+| `enabled` | `true` | Enables or disables status card publishing. |
+| `minUpdateIntervalMs` | `1500` | Minimum interval between card updates. The example config uses `2500` for fewer edits. |
+| `includeToolNames` | `true` | Reserved for display customization. |
+
+The plugin only publishes cards for Feishu direct chats. Group chats and non-Feishu sessions are ignored.
+
+## Runtime Discovery
+
+Feishu Status Bridge searches for OpenClaw's Feishu card runtime in these locations:
 
 - `FEISHU_STATUS_BRIDGE_FEISHU_DIST_DIR`
 - `~/.openclaw/npm/node_modules/@openclaw/feishu/dist`
 - `~/.npm-global/lib/node_modules/openclaw/dist`
 - `/opt/homebrew/lib/node_modules/openclaw/dist`
-- bundled OpenClaw runtimes inside `~/.openclaw/extensions/*/node_modules`
+- bundled OpenClaw runtimes under `~/.openclaw/extensions/*/node_modules`
 
-Set `FEISHU_STATUS_BRIDGE_FEISHU_DIST_DIR` if your Feishu runtime lives somewhere else.
+If your Feishu runtime is in a custom location, set:
+
+```bash
+export FEISHU_STATUS_BRIDGE_FEISHU_DIST_DIR=/path/to/feishu/dist
+```
 
 ## Verify
 
+Run a syntax check:
+
 ```bash
 npm test
+```
+
+Inspect plugin loading:
+
+```bash
 openclaw plugins inspect feishu-status-bridge
 ```
+
+Check gateway logs:
+
+```bash
+journalctl --user -u openclaw-gateway.service -n 120 --no-pager | grep feishu-status-bridge
+```
+
+Expected log line:
+
+```text
+[plugins] [feishu-status-bridge] active
+```
+
+## Troubleshooting
+
+### The plugin loads but no card appears
+
+- Confirm the conversation is a Feishu direct chat.
+- Confirm `allowConversationAccess` is enabled in the plugin hook config.
+- Confirm your Feishu/OpenClaw channel can already send interactive cards.
+
+### `Cannot locate Feishu card runtime`
+
+Set `FEISHU_STATUS_BRIDGE_FEISHU_DIST_DIR` to the directory containing OpenClaw's Feishu `send-*.js` runtime file.
+
+### The card updates too frequently
+
+Increase `minUpdateIntervalMs`:
+
+```json
+{
+  "minUpdateIntervalMs": 5000
+}
+```
+
+### Tool lines are too verbose
+
+The plugin intentionally clips tool arguments. If a specific tool is still noisy, add a custom mapping in `summarizeTool()`.
+
+## Security Notes
+
+- The plugin sends task summaries and tool previews to the Feishu user who started the direct-chat run.
+- Tool arguments are clipped but not fully redacted. Avoid putting secrets into prompts or tool arguments.
+- Do not commit OpenClaw config files that contain tokens or account secrets.
+
+## Development
+
+```bash
+npm test
+```
+
+The code is dependency-free and uses only Node.js built-ins plus OpenClaw's runtime-provided plugin APIs.
+
+## License
+
+MIT
 
