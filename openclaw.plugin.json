@@ -1,0 +1,23 @@
+{
+  "id": "feishu-status-bridge",
+  "version": "0.1.0",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean",
+        "default": true
+      },
+      "minUpdateIntervalMs": {
+        "type": "integer",
+        "minimum": 250,
+        "default": 1500
+      },
+      "includeToolNames": {
+        "type": "boolean",
+        "default": true
+      }
+    }
+  }
+}
