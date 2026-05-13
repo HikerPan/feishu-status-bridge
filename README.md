@@ -110,6 +110,19 @@ The plugin only publishes cards for Feishu direct chats. Group chats and non-Fei
 
 For very long tasks, consider setting `maxHistoryItems` to a positive number such as `20` or `50` to reduce Feishu card size.
 
+## Optional X/Twitter Workflows With TweetClaw
+
+If a Feishu-started OpenClaw agent also needs X/Twitter automation, install [TweetClaw](https://github.com/Xquik-dev/tweetclaw) beside this plugin:
+
+```bash
+openclaw plugins install @xquik/tweetclaw
+openclaw config set tools.alsoAllow '["explore", "tweetclaw"]'
+```
+
+Use Feishu Status Bridge to keep the direct-chat status card current while the agent works. Use TweetClaw for tweet search, tweet reply search, follower export, user lookup, posting tweets or replies, media upload/download, direct messages, tweet monitors, webhooks, and giveaway draws.
+
+Keep TweetClaw credentials in TweetClaw config or environment variables on the OpenClaw host. Posting, replying, following, DMs, monitors, webhooks, and other visible or write actions should still pass through OpenClaw approval before they run from a Feishu conversation.
+
 ## Runtime Discovery
 
 Feishu Status Bridge searches for OpenClaw's Feishu card runtime in these locations:
