@@ -37,9 +37,33 @@ function timeLabel(date = new Date()) {
 }
 
 function clip(value, max = 64) {
-  const text = String(value ?? "").replace(/\s+/g, " ").trim();
+  const text = redactSensitive(value).replace(/\s+/g, " ").trim();
   if (text.length <= max) return text;
   return `${text.slice(0, Math.max(0, max - 1))}…`;
+}
+
+function redactSensitive(value) {
+  let text = String(value ?? "");
+  text = text.replace(/\b(sk-(?:proj-)?[A-Za-z0-9_-]{8,})\b/g, "sk-[redacted]");
+  text = text.replace(/\b(gh[opsu]_[A-Za-z0-9_]{8,})\b/g, "ghp_[redacted]");
+  text = text.replace(/\b(glpat-[A-Za-z0-9_-]{8,})\b/g, "glpat-[redacted]");
+  text = text.replace(/\b(Bearer\s+)[A-Za-z0-9._~+/=-]{8,}/gi, "$1[redacted]");
+  text = text.replace(
+    /\b((?:OPENAI_API_KEY|ANTHROPIC_API_KEY|GOOGLE_API_KEY|GITHUB_TOKEN|GH_TOKEN|FEISHU_APP_SECRET|LARK_APP_SECRET|API_KEY|TOKEN|PASSWORD|PASSWD|SECRET)\s*=\s*)(?:"[^"]*"|'[^']*'|[^\s]+)/gi,
+    "$1[redacted]"
+  );
+  text = text.replace(
+    /(\b--?(?:password|passwd|token|secret|api-key|apikey|key)\b(?:=|\s+))(?:"[^"]*"|'[^']*'|[^\s]+)/gi,
+    "$1[redacted]"
+  );
+  text = redactUrlSecrets(text);
+  text = text.replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, "[email]");
+  text = text.replace(/(?<!\d)(?:\+?\d[\d\s().-]{8,}\d)(?!\d)/g, "[phone]");
+  return text;
+}
+
+function redactUrlSecrets(text) {
+  return text.replace(/([?&](?:token|access_token|refresh_token|key|api_key|apikey|password|passwd|secret)=)[^&#\s]+/gi, "$1[redacted]");
 }
 
 function resolveConfig(api, event) {
@@ -155,6 +179,7 @@ function stateFor(states, sessionKey, ctx = {}) {
       history: [],
       activeTools: new Map(),
       finalSummary: undefined,
+      lastErrorSummary: undefined,
       stats: createStats(),
       sessionKey,
       runId: ctx.runId
@@ -221,7 +246,9 @@ function iconForTool(name) {
     skill_view: "📚",
     todo: "☑️",
     execute_code: "⚙️",
-    terminal: "🖥️"
+    terminal: "🖥️",
+    message: "💬",
+    tts: "🔊"
   };
   return icons[name] ?? "⚡";
 }
@@ -243,15 +270,89 @@ function formatTrailLine(entry) {
   if (!entry) return "";
   if (isRecord(entry)) {
     const icon = entry.icon || iconForKind(entry.kind);
-    return `${icon} ${entry.text ?? `${entry.kind}: ${entry.detail ?? ""}`}`.trim();
+    return `${icon} ${redactSensitive(entry.text ?? `${entry.kind}: ${entry.detail ?? ""}`)}`.trim();
   }
-  return String(entry);
+  return redactSensitive(entry);
 }
 
-function summarizeTool(event) {
+function safeUrlSummary(value) {
+  const input = Array.isArray(value) ? value[0] : value;
+  const raw = String(input ?? "").trim();
+  if (!raw) return "";
+  try {
+    const url = new URL(raw);
+    return redactUrlSecrets(`${url.hostname}${url.pathname === "/" ? "" : url.pathname}`);
+  } catch {
+    return clip(raw, 64);
+  }
+}
+
+function summarizeCommand(cmd) {
+  const text = redactSensitive(cmd);
+  const normalized = text.replace(/\s+/g, " ").trim();
+  if (!normalized) return "run command";
+  const gitMatch = /^git\s+([a-z-]+)/.exec(normalized);
+  if (gitMatch) return `git ${gitMatch[1]}`;
+  const npmMatch = /^(npm|pnpm|yarn)\s+([^\s]+)/.exec(normalized);
+  if (npmMatch) return `${npmMatch[1]} ${npmMatch[2]}`;
+  const first = normalized.split(/\s+/)[0];
+  return first ? `run ${first}` : "run command";
+}
+
+function toolDisplayName(name) {
+  const names = {
+    exec_command: "shell",
+    write_stdin: "terminal input",
+    apply_patch: "edit files",
+    web_search: "web search",
+    tavily_search: "web search",
+    tavily_extract: "extract page",
+    browser: "browser",
+    image: "analyze image",
+    image_generate: "generate image",
+    vision_analyze: "analyze image",
+    feishu_doc: "Feishu doc",
+    feishu_bitable_list_records: "Feishu table",
+    memory_search: "memory search",
+    skill_view: "read skill",
+    todo: "plan tasks",
+    execute_code: "run code",
+    terminal: "terminal",
+    message: "send message",
+    tts: "voice reply"
+  };
+  return names[name] ?? name.replace(/^_+/, "").replace(/_/g, " ");
+}
+
+function formatToolLabel(name, detail, cfg = {}) {
+  const icon = iconForTool(name);
+  const displayName = cfg.includeToolNames === false ? toolDisplayName(name) : name;
+  return detail ? `${icon} ${displayName}("${clip(detail, 64)}")` : `${icon} ${displayName}`;
+}
+
+function summarizePatch(value) {
+  const text = String(value ?? "");
+  const files = [];
+  for (const match of text.matchAll(/^\*\*\* (?:Update|Add|Delete) File: (.+)$/gm)) {
+    files.push(path.basename(match[1].trim()));
+  }
+  if (files.length) return `patch ${files.slice(0, 3).join(", ")}${files.length > 3 ? ` +${files.length - 3}` : ""}`;
+  return "apply patch";
+}
+
+function summarizeTool(event, cfg = {}) {
   const name = readString(event, "toolName") ?? readString(event, "name") ?? "tool";
   const params = isRecord(event?.params) ? event.params : {};
   if (name.startsWith("_")) return "";
+
+  if (name === "message") return `${iconForTool(name)} ${cfg.includeToolNames === false ? "send message" : "message"}`;
+  if (name === "tts") return `${iconForTool(name)} ${cfg.includeToolNames === false ? "voice reply" : "tts"}`;
+  if (name === "exec_command") return formatToolLabel(name, summarizeCommand(params.cmd ?? params.command), cfg);
+  if (name === "terminal") return formatToolLabel(name, summarizeCommand(params.command ?? params.cmd), cfg);
+  if (name === "apply_patch") return formatToolLabel(name, summarizePatch(params.patch ?? params.text ?? event?.input), cfg);
+  if (name === "browser") return formatToolLabel(name, `${params.action ?? "act"} ${safeUrlSummary(params.url ?? params.targetUrl)}`.trim(), cfg);
+  if (name === "tavily_extract") return formatToolLabel(name, safeUrlSummary(params.urls), cfg);
+  if (name === "feishu_doc") return formatToolLabel(name, params.action ?? "document", cfg);
 
   const primaryArgs = {
     exec_command: "cmd",
@@ -274,18 +375,16 @@ function summarizeTool(event) {
   };
 
   if (name === "todo" && Array.isArray(params.todos)) {
-    return `${iconForTool(name)} todo("${params.merge ? "updating" : "planning"} ${params.todos.length} task(s)")`;
+    return formatToolLabel(name, `${params.merge ? "updating" : "planning"} ${params.todos.length} task(s)`, cfg);
   }
 
   const key = primaryArgs[name] ?? ["query", "text", "cmd", "command", "path", "name", "prompt", "code", "goal", "url"]
     .find((candidate) => candidate in params);
-  if (!key) return name;
+  if (!key) return formatToolLabel(name, "", cfg);
 
   let value = params[key];
   if (Array.isArray(value)) value = value[0] ?? "";
-  const preview = clip(value, 64);
-  if (preview) return `${iconForTool(name)} ${name}("${preview}")`;
-  return `${iconForTool(name)} ${name}`;
+  return formatToolLabel(name, value, cfg);
 }
 
 function formatStatus(state) {
@@ -338,7 +437,8 @@ function formatFinalSummary(state, duration) {
   if (stats.toolsFailed > 0) parts.push(`失败 ${stats.toolsFailed}`);
   if (stats.compactions > 0) parts.push(`压缩 ${stats.compactions}`);
   const last = state.history.length ? `\n最后动作: ${formatTrailLine(state.history[state.history.length - 1])}` : "";
-  return `${icon} 完成摘要: ${parts.join(" · ")}${last}`;
+  const error = state.lastErrorSummary ? `\n错误诊断: ${state.lastErrorSummary}` : "";
+  return `${icon} 完成摘要: ${parts.join(" · ")}${last}${error}`;
 }
 
 function formatActiveTools(state) {
@@ -401,20 +501,56 @@ function formatHistoryPanel(state) {
   };
 }
 
+function compactError(value) {
+  if (!value) return "";
+  if (value instanceof Error) return value.message || value.name;
+  if (typeof value === "string") return value;
+  if (isRecord(value)) {
+    return value.message ?? value.stderr ?? value.error ?? value.code ?? JSON.stringify(value);
+  }
+  return String(value);
+}
+
+function classifyError(text) {
+  const value = text.toLowerCase();
+  if (/auth|unauthori[sz]ed|forbidden|permission|credential|token|api key|401|403/.test(value)) return "认证/权限";
+  if (/enotfound|econn|network|timed out|timeout|dns|socket|http 5\d\d/.test(value)) return "网络";
+  if (/enoent|no such file|not found|cannot find|path/.test(value)) return "路径/文件";
+  if (/exit code|command failed|non-zero|failed/.test(value)) return "命令失败";
+  return "运行错误";
+}
+
+function summarizeError(event) {
+  const code = event?.exitCode ?? event?.code ?? event?.result?.exitCode;
+  const failedExit = typeof code === "number" ? code !== 0 : Boolean(code && code !== "0");
+  if (!event?.error && !event?.result?.error && !failedExit) return "";
+  const raw = compactError(event?.error ?? event?.result?.error ?? event?.stderr ?? event?.result?.stderr);
+  const text = clip(raw, 120);
+  if (!text) return "";
+  const codePart = code !== undefined && code !== null ? `exit ${code} · ` : "";
+  return `${codePart}${classifyError(text)} · ${text}`;
+}
+
 function completeTool(state, event, cfg) {
   const id = event?.toolCallId;
   const started = id ? state.activeTools.get(id) : undefined;
-  const label = started?.label || summarizeTool(event);
+  const label = started?.label || summarizeTool(event, cfg);
   if (!label) return;
 
   if (id) state.activeTools.delete(id);
   state.stats.toolsCompleted += 1;
-  if (event?.error) state.stats.toolsFailed += 1;
+  const errorSummary = summarizeError(event);
+  if (event?.error || errorSummary) {
+    state.stats.toolsFailed += 1;
+    state.lastErrorSummary = errorSummary;
+  }
   markEvent(state);
   const duration = typeof event?.durationMs === "number" ? ` (${(event.durationMs / 1000).toFixed(1)}s)` : "";
-  const icon = event?.error ? "❌" : "✅";
-  const mark = event?.error ? "✗" : "✓";
-  pushHistory(state, `${icon} ${label}${duration} ${mark}`, cfg.maxHistoryItems);
+  const failed = Boolean(event?.error || errorSummary);
+  const icon = failed ? "❌" : "✅";
+  const mark = failed ? "✗" : "✓";
+  const suffix = failed && errorSummary ? ` · ${errorSummary}` : "";
+  pushHistory(state, `${icon} ${label}${duration} ${mark}${suffix}`, cfg.maxHistoryItems);
 }
 
 function statusTemplate(status) {
@@ -454,6 +590,7 @@ function resetTurnState(state) {
   state.history = [];
   state.activeTools = new Map();
   state.finalSummary = undefined;
+  state.lastErrorSummary = undefined;
   state.stats = createStats();
   state.objective = undefined;
 }
@@ -651,8 +788,9 @@ export default {
     api.on("before_tool_call", async (event, ctx) => {
       const sessionKey = ctx?.sessionKey;
       if (!parseFeishuDirectSessionKey(sessionKey)) return;
+      const cfg = resolveConfig(api, event);
       const state = stateFor(states, sessionKey, ctx);
-      const label = summarizeTool(event);
+      const label = summarizeTool(event, cfg);
       if (!shouldDisplayTool(label)) return;
       state.status = "调用工具";
       state.stats.toolCallsStarted += 1;
@@ -672,7 +810,7 @@ export default {
       state.status = event?.error ? "工具报错" : "继续处理";
       completeTool(state, event, cfg);
       if (state.activeTools.size === 0) {
-        setCurrent(state, event?.error ? "error" : "thinking", event?.error ? clip(event.error, 96) : "waiting for next step");
+        setCurrent(state, event?.error ? "error" : "thinking", event?.error ? summarizeError(event) : "waiting for next step");
       }
       await publish(api, states, ctx, event);
     }, { timeoutMs: 10000 });
@@ -707,7 +845,7 @@ export default {
       const duration = typeof event?.durationMs === "number" ? `${Math.round(event.durationMs / 1000)}s` : compactElapsed(state.startedAt);
       state.activeTools.clear();
       if (cfg.showFinalSummary !== false) state.finalSummary = formatFinalSummary(state, duration);
-      setCurrent(state, state.status === "完成" ? "done" : "error", event?.error ? clip(event.error, 96) : `total ${duration}`);
+      setCurrent(state, state.status === "完成" ? "done" : "error", event?.error ? summarizeError(event) : `total ${duration}`);
       await publish(api, states, ctx, event, { terminal: true });
       clearState(states, sessionKey);
     }, { timeoutMs: 20000 });

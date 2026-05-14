@@ -16,6 +16,9 @@ The display style is inspired by Hermes Agent: short, action-oriented, icon-led,
 - Shows recent tool actions in a native Feishu `🧭 详情` collapsible panel.
 - Marks long-running active tools as `可能卡住` after a configurable threshold.
 - Replaces the final card with a compact completion summary when the run ends.
+- Redacts common secrets, API keys, tokens, emails, phone numbers, and sensitive URL query parameters before publishing card text.
+- Adds compact error diagnosis for failed tool calls.
+- Supports human-readable tool labels by setting `includeToolNames` to `false`.
 - Keeps all recent history rows by default for the current run, with an optional cap if you prefer shorter cards.
 - Adds icons for common tools such as terminal, web search, browser, image generation, memory, and Feishu docs.
 - Marks completed and failed tool calls with clear `✓` / `✗` indicators.
@@ -110,7 +113,7 @@ systemctl --user restart openclaw-gateway.service
 | `enabled` | `true` | Enables or disables status card publishing. |
 | `minUpdateIntervalMs` | `1500` | Minimum interval between card updates. The example config uses `2500` for fewer edits. |
 | `maxHistoryItems` | `0` | Maximum number of `🧭 最近` rows to keep. `0` means keep all rows for the current run. |
-| `includeToolNames` | `true` | Reserved for display customization. |
+| `includeToolNames` | `true` | Shows raw tool function names. Set to `false` for human-readable labels such as `shell`, `browser`, and `web search`. |
 | `showStats` | `true` | Shows compact model/tool/failure/update counters under `📊 进度`. |
 | `showActiveTools` | `true` | Shows currently running tool calls under `🛠️ 活跃工具`. |
 | `showDetailPanel` | `true` | Shows recent history in a native Feishu collapsible detail panel. |
@@ -204,7 +207,7 @@ Limit the number of `🧭 最近` rows:
 ## Security Notes
 
 - The plugin sends task summaries and tool previews to the Feishu user who started the direct-chat run.
-- Tool arguments are clipped but not fully redacted. Avoid putting secrets into prompts or tool arguments.
+- Tool arguments are clipped and common secrets are redacted before display. Redaction is best-effort, so avoid putting secrets into prompts or tool arguments.
 - Do not commit OpenClaw config files that contain tokens or account secrets.
 
 ## Development
