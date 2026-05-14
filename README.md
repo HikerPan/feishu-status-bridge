@@ -16,6 +16,8 @@ The display style is inspired by Hermes Agent: short, action-oriented, icon-led,
 - Shows recent tool actions in a native Feishu `🧭 详情` collapsible panel.
 - Marks long-running active tools as `可能卡住` after a configurable threshold.
 - Replaces the final card with a compact completion summary when the run ends.
+- Adds Feishu card buttons for refreshing the card, viewing a plain-text summary, and hiding further card updates.
+- Optionally adds a `停止任务` button that dispatches OpenClaw's built-in `/stop` command.
 - Redacts common secrets, API keys, tokens, emails, phone numbers, and sensitive URL query parameters before publishing card text.
 - Adds compact error diagnosis for failed tool calls.
 - Supports human-readable tool labels by setting `includeToolNames` to `false`.
@@ -73,7 +75,9 @@ Add the plugin to `~/.openclaw/openclaw.json`:
           "enabled": true,
           "minUpdateIntervalMs": 2500,
           "maxHistoryItems": 0,
-          "includeToolNames": true
+          "includeToolNames": true,
+          "showActionButtons": true,
+          "showStopButton": false
         },
         "hooks": {
           "allowConversationAccess": true,
@@ -121,10 +125,24 @@ systemctl --user restart openclaw-gateway.service
 | `stuckThresholdMs` | `60000` | Marks active tools as `可能卡住` after this many milliseconds. |
 | `stuckCheckIntervalMs` | `10000` | Refreshes active-tool elapsed time and stuck status while a tool is running. |
 | `showFinalSummary` | `true` | Shows a compact completion summary on the final status card. |
+| `showActionButtons` | `true` | Shows `刷新状态`, `查看摘要`, and `隐藏卡片` buttons. |
+| `showStopButton` | `false` | Shows a `停止任务` button that dispatches `/stop`. Disabled by default because it aborts the active run. |
+| `actionStateTtlMs` | `3600000` | Keeps finished run state available for summary buttons for this many milliseconds. |
 
 The plugin only publishes cards for Feishu direct chats. Group chats and non-Feishu sessions are ignored.
 
 For very long tasks, consider setting `maxHistoryItems` to a positive number such as `20` or `50` to reduce Feishu card size. Set `showDetailPanel` to `false` if you prefer the older always-visible `🧭 最近` block.
+
+### Card actions
+
+Card buttons are implemented through Feishu card actions that dispatch the plugin command `/fsb`.
+
+- `/fsb refresh <token>` refreshes the matching card.
+- `/fsb summary <token>` returns a plain-text status summary.
+- `/fsb hide <token>` replaces the card with a hidden notice and stops future updates for that run.
+- The optional stop button dispatches OpenClaw's built-in `/stop` command in the same Feishu direct conversation.
+
+OpenClaw also has a built-in `/steer <message>` command for active runs. Feishu card buttons cannot collect arbitrary text, so this plugin does not expose a generic "supplement instruction" button yet.
 
 ## Runtime Discovery
 

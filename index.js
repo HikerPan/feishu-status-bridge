@@ -4,6 +4,8 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 const PLUGIN_ID = "feishu-status-bridge";
+const COMMAND_NAME = "fsb";
+const COMMAND_USAGE = "Usage: /fsb status|refresh|summary|hide <token>";
 
 let feishuSendModulePromise;
 
@@ -19,6 +21,19 @@ function readString(record, key) {
 function parseFeishuDirectSessionKey(sessionKey) {
   const match = /^agent:[^:]+:feishu:direct:(ou_[A-Za-z0-9_]+)$/.exec(sessionKey ?? "");
   return match?.[1];
+}
+
+function encodeActionToken(sessionKey) {
+  return Buffer.from(String(sessionKey ?? ""), "utf8").toString("base64url");
+}
+
+function decodeActionToken(token) {
+  try {
+    const decoded = Buffer.from(String(token ?? ""), "base64url").toString("utf8");
+    return parseFeishuDirectSessionKey(decoded) ? decoded : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function compactElapsed(startedAt, now = Date.now()) {
@@ -90,7 +105,13 @@ function resolveConfig(api, event) {
       1000,
       typeof cfg.stuckCheckIntervalMs === "number" ? cfg.stuckCheckIntervalMs : 10000
     ),
-    showFinalSummary: cfg.showFinalSummary !== false
+    showFinalSummary: cfg.showFinalSummary !== false,
+    showActionButtons: cfg.showActionButtons !== false,
+    showStopButton: cfg.showStopButton === true,
+    actionStateTtlMs: Math.max(
+      60000,
+      typeof cfg.actionStateTtlMs === "number" ? cfg.actionStateTtlMs : 60 * 60000
+    )
   };
 }
 
@@ -171,7 +192,10 @@ function stateFor(states, sessionKey, ctx = {}) {
       lastUpdatedAt: 0,
       pendingTimer: undefined,
       activeToolTimer: undefined,
+      cleanupTimer: undefined,
       messageId: undefined,
+      hidden: false,
+      terminal: false,
       status: "运行中",
       model: undefined,
       objective: undefined,
@@ -217,6 +241,16 @@ function pushHistory(state, text, maxHistoryItems = 0) {
   if (maxHistoryItems > 0) {
     while (state.history.length > maxHistoryItems) state.history.shift();
   }
+}
+
+function clearTimers(state) {
+  if (state?.pendingTimer) clearTimeout(state.pendingTimer);
+  if (state?.activeToolTimer) clearTimeout(state.activeToolTimer);
+  if (state?.cleanupTimer) clearTimeout(state.cleanupTimer);
+  if (!state) return;
+  state.pendingTimer = undefined;
+  state.activeToolTimer = undefined;
+  state.cleanupTimer = undefined;
 }
 
 function setCurrent(state, kind, detail) {
@@ -441,6 +475,19 @@ function formatFinalSummary(state, duration) {
   return `${icon} 完成摘要: ${parts.join(" · ")}${last}${error}`;
 }
 
+function formatTextSummary(state) {
+  if (!state) return "没有找到这次运行的状态记录。";
+  return [
+    `OpenClaw ${effectiveStatus(state)} · ${compactElapsed(state.startedAt)}`,
+    state.objective ? `任务: ${clip(state.objective, 120)}` : undefined,
+    formatStats(state),
+    state.finalSummary,
+    state.current ? `当前: ${iconForKind(state.current.kind)} ${state.current.kind}: ${state.current.detail}` : undefined,
+    state.activeTools?.size ? formatActiveTools(state) : undefined,
+    state.history.length ? ["最近动作:", ...state.history.map(formatTrailLine)].join("\n") : undefined
+  ].filter(Boolean).join("\n");
+}
+
 function formatActiveTools(state) {
   if (!state.activeTools?.size) return undefined;
   const lines = [];
@@ -498,6 +545,73 @@ function formatHistoryPanel(state) {
       tag: "markdown",
       content: state.history.map(formatTrailLine).join("\n")
     }]
+  };
+}
+
+function buildFeishuCardButton(params) {
+  return {
+    tag: "button",
+    text: {
+      tag: "plain_text",
+      content: params.label
+    },
+    type: params.type ?? "default",
+    value: {
+      text: params.command
+    }
+  };
+}
+
+function buildActionButtons(state) {
+  if (state.showActionButtons === false || state.hidden) return undefined;
+  const token = encodeActionToken(state.sessionKey);
+  const actions = [
+    buildFeishuCardButton({
+      label: "刷新状态",
+      type: "primary",
+      command: `/${COMMAND_NAME} refresh ${token}`
+    }),
+    buildFeishuCardButton({
+      label: "查看摘要",
+      command: `/${COMMAND_NAME} summary ${token}`
+    }),
+    buildFeishuCardButton({
+      label: "隐藏卡片",
+      command: `/${COMMAND_NAME} hide ${token}`
+    })
+  ];
+  if (state.showStopButton === true && state.terminal !== true) {
+    actions.push(buildFeishuCardButton({
+      label: "停止任务",
+      type: "danger",
+      command: "/stop"
+    }));
+  }
+  return {
+    tag: "action",
+    actions
+  };
+}
+
+function buildHiddenCard(state) {
+  return {
+    schema: "2.0",
+    config: {
+      width_mode: "fill"
+    },
+    header: {
+      template: "grey",
+      title: {
+        tag: "plain_text",
+        content: "OpenClaw Status Hidden"
+      }
+    },
+    body: {
+      elements: [{
+        tag: "markdown",
+        content: `状态卡已隐藏 · ${compactElapsed(state.startedAt)}\n后续运行不会再刷新这张卡。`
+      }]
+    }
   };
 }
 
@@ -580,11 +694,10 @@ function statusTitle(status) {
 function resetTurnState(state) {
   state.startedAt = Date.now();
   state.lastUpdatedAt = 0;
-  if (state.pendingTimer) clearTimeout(state.pendingTimer);
-  if (state.activeToolTimer) clearTimeout(state.activeToolTimer);
-  state.pendingTimer = undefined;
-  state.activeToolTimer = undefined;
+  clearTimers(state);
   state.messageId = undefined;
+  state.hidden = false;
+  state.terminal = false;
   state.status = "运行中";
   state.current = undefined;
   state.history = [];
@@ -613,6 +726,7 @@ function buildMarkdownStatus(state) {
 }
 
 function buildStatusCard(state) {
+  if (state.hidden) return buildHiddenCard(state);
   const status = effectiveStatus(state);
   const title = statusTitle(status);
   const elements = [{
@@ -621,6 +735,8 @@ function buildStatusCard(state) {
   }];
   const historyPanel = formatHistoryPanel(state);
   if (historyPanel) elements.push(historyPanel);
+  const actionButtons = buildActionButtons(state);
+  if (actionButtons) elements.push(actionButtons);
 
   return {
     schema: "2.0",
@@ -706,6 +822,7 @@ async function publish(api, states, ctx, event, options = {}) {
   if (!cfg.enabled) return;
 
   const state = stateFor(states, sessionKey, ctx);
+  if (state.hidden && options.force !== true && options.terminal !== true) return;
   state.showStats = cfg.showStats;
   state.showActiveTools = cfg.showActiveTools;
   state.showDetailPanel = cfg.showDetailPanel;
@@ -713,6 +830,9 @@ async function publish(api, states, ctx, event, options = {}) {
   state.stuckThresholdMs = cfg.stuckThresholdMs;
   state.stuckCheckIntervalMs = cfg.stuckCheckIntervalMs;
   state.showFinalSummary = cfg.showFinalSummary;
+  state.showActionButtons = cfg.showActionButtons;
+  state.showStopButton = cfg.showStopButton;
+  state.actionStateTtlMs = cfg.actionStateTtlMs;
   const now = Date.now();
   const force = options.force === true || options.terminal === true || !state.messageId;
 
@@ -733,7 +853,7 @@ async function publish(api, states, ctx, event, options = {}) {
   try {
     await upsertStatusMessage(api, state, openId);
     state.lastUpdatedAt = Date.now();
-    scheduleActiveToolMonitor(api, states, ctx, event, state, cfg);
+    if (!state.hidden) scheduleActiveToolMonitor(api, states, ctx, event, state, cfg);
   } catch (error) {
     api.logger?.warn?.(`[${PLUGIN_ID}] publish failed: ${String(error)}`);
   }
@@ -741,9 +861,51 @@ async function publish(api, states, ctx, event, options = {}) {
 
 function clearState(states, sessionKey) {
   const state = states.get(sessionKey);
-  if (state?.pendingTimer) clearTimeout(state.pendingTimer);
-  if (state?.activeToolTimer) clearTimeout(state.activeToolTimer);
+  clearTimers(state);
   states.delete(sessionKey);
+}
+
+function scheduleStateCleanup(states, sessionKey, ttlMs) {
+  const state = states.get(sessionKey);
+  if (!state) return;
+  if (state.cleanupTimer) clearTimeout(state.cleanupTimer);
+  state.cleanupTimer = setTimeout(() => clearState(states, sessionKey), ttlMs);
+}
+
+async function handleCommand(api, states, ctx) {
+  const tokens = (ctx.args?.trim() ?? "").split(/\s+/).filter(Boolean);
+  const action = (tokens[0] ?? "status").toLowerCase();
+  if (action === "help") return { text: COMMAND_USAGE };
+
+  const tokenSessionKey = decodeActionToken(tokens[1]);
+  const sessionKey = tokenSessionKey ?? ctx.CommandTargetSessionKey ?? ctx.sessionKey ?? ctx.SessionKey;
+  const state = sessionKey ? states.get(sessionKey) : undefined;
+
+  if (action === "status") {
+    return { text: state ? formatTextSummary(state) : "当前没有可用的 Feishu Status Bridge 运行状态。" };
+  }
+
+  if (!state || !sessionKey) {
+    return { text: "没有找到这张状态卡对应的运行记录，可能已经过期或 Gateway 刚重启过。" };
+  }
+
+  if (action === "refresh") {
+    await publish(api, states, { sessionKey, runId: state.runId }, { sessionKey }, { force: true });
+    return { text: "已刷新状态卡。" };
+  }
+
+  if (action === "summary") {
+    return { text: formatTextSummary(state) };
+  }
+
+  if (action === "hide") {
+    state.hidden = true;
+    clearTimers(state);
+    await publish(api, states, { sessionKey, runId: state.runId }, { sessionKey }, { force: true });
+    return { text: "已隐藏状态卡，后续不会再刷新。" };
+  }
+
+  return { text: COMMAND_USAGE };
 }
 
 export default {
@@ -846,8 +1008,20 @@ export default {
       state.activeTools.clear();
       if (cfg.showFinalSummary !== false) state.finalSummary = formatFinalSummary(state, duration);
       setCurrent(state, state.status === "完成" ? "done" : "error", event?.error ? summarizeError(event) : `total ${duration}`);
+      state.terminal = true;
       await publish(api, states, ctx, event, { terminal: true });
-      clearState(states, sessionKey);
+      if (state.showActionButtons === false) clearState(states, sessionKey);
+      else {
+        clearTimers(state);
+        scheduleStateCleanup(states, sessionKey, state.actionStateTtlMs ?? 60 * 60000);
+      }
     }, { timeoutMs: 20000 });
+
+    api.registerCommand({
+      name: COMMAND_NAME,
+      description: "Control Feishu Status Bridge status cards.",
+      acceptsArgs: true,
+      handler: async (ctx) => handleCommand(api, states, ctx)
+    });
   }
 };
