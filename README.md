@@ -11,6 +11,8 @@ The display style is inspired by Hermes Agent: short, action-oriented, icon-led,
 - Live Feishu status card per agent run.
 - One card is edited in place instead of spamming the chat.
 - Shows the active phase under `📍 当前`.
+- Shows compact live counters under `📊 进度`.
+- Shows currently running tools under `🛠️ 活跃工具`.
 - Shows recent tool actions under `🧭 最近`, one action per line.
 - Keeps all recent history rows by default for the current run, with an optional cap if you prefer shorter cards.
 - Adds icons for common tools such as terminal, web search, browser, image generation, memory, and Feishu docs.
@@ -23,11 +25,13 @@ Example status text:
 ```text
 OpenClaw 调用工具 · 14s · openai-codex/gpt-5.5
 任务: 请帮我修复这个问题
+📊 进度: 模型 1 · 工具 1/2 · 更新 15:36:18
 📍 当前:
 ⚡ tool: 🖥️ exec_command("npm test")
+🛠️ 活跃工具:
+⏳ 🖥️ exec_command("npm test") · 4s
 🧭 最近:
 ✅ 🔎 tavily_search("OpenClaw plugin hooks") (1.3s) ✓
-✅ 🖥️ exec_command("node --check index.js") (0.1s) ✓
 ```
 
 ## Requirements
@@ -105,6 +109,8 @@ systemctl --user restart openclaw-gateway.service
 | `minUpdateIntervalMs` | `1500` | Minimum interval between card updates. The example config uses `2500` for fewer edits. |
 | `maxHistoryItems` | `0` | Maximum number of `🧭 最近` rows to keep. `0` means keep all rows for the current run. |
 | `includeToolNames` | `true` | Reserved for display customization. |
+| `showStats` | `true` | Shows compact model/tool/failure/update counters under `📊 进度`. |
+| `showActiveTools` | `true` | Shows currently running tool calls under `🛠️ 活跃工具`. |
 
 The plugin only publishes cards for Feishu direct chats. Group chats and non-Feishu sessions are ignored.
 

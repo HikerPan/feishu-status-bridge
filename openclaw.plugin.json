@@ -23,6 +23,16 @@
       "includeToolNames": {
         "type": "boolean",
         "default": true
+      },
+      "showStats": {
+        "type": "boolean",
+        "default": true,
+        "description": "Show compact model/tool/failure/update counters in the status card."
+      },
+      "showActiveTools": {
+        "type": "boolean",
+        "default": true,
+        "description": "Show currently running tool calls while they are active."
       }
     }
   }

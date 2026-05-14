@@ -53,7 +53,9 @@ function resolveConfig(api, event) {
       typeof cfg.minUpdateIntervalMs === "number" ? cfg.minUpdateIntervalMs : 1500
     ),
     maxHistoryItems: Number.isInteger(cfg.maxHistoryItems) && cfg.maxHistoryItems > 0 ? cfg.maxHistoryItems : 0,
-    includeToolNames: cfg.includeToolNames !== false
+    includeToolNames: cfg.includeToolNames !== false,
+    showStats: cfg.showStats !== false,
+    showActiveTools: cfg.showActiveTools !== false
   };
 }
 
@@ -140,6 +142,7 @@ function stateFor(states, sessionKey, ctx = {}) {
       current: undefined,
       history: [],
       activeTools: new Map(),
+      stats: createStats(),
       sessionKey,
       runId: ctx.runId
     };
@@ -150,6 +153,22 @@ function stateFor(states, sessionKey, ctx = {}) {
     state.model = [ctx.modelProviderId, ctx.modelId].filter(Boolean).join("/");
   }
   return state;
+}
+
+function createStats() {
+  return {
+    modelCalls: 0,
+    toolCallsStarted: 0,
+    toolsCompleted: 0,
+    toolsFailed: 0,
+    compactions: 0,
+    lastEventAt: undefined
+  };
+}
+
+function markEvent(state) {
+  if (!state.stats) state.stats = createStats();
+  state.stats.lastEventAt = timeLabel();
 }
 
 function pushHistory(state, text, maxHistoryItems = 0) {
@@ -168,6 +187,7 @@ function setCurrent(state, kind, detail) {
     kind,
     detail: clip(detail, 96)
   };
+  markEvent(state);
 }
 
 function iconForTool(name) {
@@ -263,8 +283,10 @@ function formatStatus(state) {
   ].filter(Boolean);
 
   const currentLine = state.current
-    ? `📍 当前:\n${iconForKind(state.current.kind)} ${state.current.kind}: ${state.current.detail}`
+    ? `📍 当前 (${state.current.at}):\n${iconForKind(state.current.kind)} ${state.current.kind}: ${state.current.detail}`
     : "📍 当前:\n• 等待运行事件";
+  const statsLine = state.showStats === false ? undefined : formatStats(state);
+  const activeToolsBlock = state.showActiveTools === false ? undefined : formatActiveTools(state);
   const historyBlock = state.history.length
     ? ["🧭 最近:", ...state.history.map(formatTrailLine)].join("\n")
     : undefined;
@@ -272,9 +294,33 @@ function formatStatus(state) {
   return [
     header.join(" · "),
     state.objective ? `任务: ${clip(state.objective, 80)}` : undefined,
+    statsLine,
     currentLine,
+    activeToolsBlock,
     historyBlock
   ].filter(Boolean).join("\n");
+}
+
+function formatStats(state) {
+  const stats = state.stats ?? createStats();
+  const parts = [
+    `模型 ${stats.modelCalls}`,
+    `工具 ${stats.toolsCompleted}/${stats.toolCallsStarted}`
+  ];
+  if (stats.toolsFailed > 0) parts.push(`失败 ${stats.toolsFailed}`);
+  if (stats.compactions > 0) parts.push(`压缩 ${stats.compactions}`);
+  if (stats.lastEventAt) parts.push(`更新 ${stats.lastEventAt}`);
+  return `📊 进度: ${parts.join(" · ")}`;
+}
+
+function formatActiveTools(state) {
+  if (!state.activeTools?.size) return undefined;
+  const lines = [];
+  for (const tool of state.activeTools.values()) {
+    const elapsed = tool.startedAt ? compactElapsed(tool.startedAt) : "";
+    lines.push(`⏳ ${tool.label}${elapsed ? ` · ${elapsed}` : ""}`);
+  }
+  return ["🛠️ 活跃工具:", ...lines].join("\n");
 }
 
 function completeTool(state, event, cfg) {
@@ -284,6 +330,9 @@ function completeTool(state, event, cfg) {
   if (!label) return;
 
   if (id) state.activeTools.delete(id);
+  state.stats.toolsCompleted += 1;
+  if (event?.error) state.stats.toolsFailed += 1;
+  markEvent(state);
   const duration = typeof event?.durationMs === "number" ? ` (${(event.durationMs / 1000).toFixed(1)}s)` : "";
   const icon = event?.error ? "❌" : "✅";
   const mark = event?.error ? "✗" : "✓";
@@ -320,6 +369,7 @@ function resetTurnState(state) {
   state.current = undefined;
   state.history = [];
   state.activeTools = new Map();
+  state.stats = createStats();
   state.objective = undefined;
 }
 
@@ -407,16 +457,19 @@ async function publish(api, states, ctx, event, options = {}) {
   if (!cfg.enabled) return;
 
   const state = stateFor(states, sessionKey, ctx);
+  state.showStats = cfg.showStats;
+  state.showActiveTools = cfg.showActiveTools;
   const now = Date.now();
   const force = options.force === true || options.terminal === true || !state.messageId;
 
-  if (!force && now - state.lastUpdatedAt < cfg.minUpdateIntervalMs) {
+  const elapsedSinceUpdate = now - state.lastUpdatedAt;
+  if (!force && state.messageId && elapsedSinceUpdate < cfg.minUpdateIntervalMs) {
     clearTimeout(state.pendingTimer);
     state.pendingTimer = setTimeout(() => {
       publish(api, states, ctx, event, { force: true }).catch((error) => {
         api.logger?.warn?.(`[${PLUGIN_ID}] delayed publish failed: ${String(error)}`);
       });
-    }, cfg.minUpdateIntervalMs);
+    }, cfg.minUpdateIntervalMs - elapsedSinceUpdate);
     return;
   }
 
@@ -463,6 +516,7 @@ export default {
       if (!parseFeishuDirectSessionKey(sessionKey)) return;
       const state = stateFor(states, sessionKey, ctx);
       state.status = "思考中";
+      state.stats.modelCalls += 1;
       noteModel(state, event, "start");
       await publish(api, states, ctx, event);
     }, { timeoutMs: 10000 });
@@ -482,6 +536,8 @@ export default {
       const label = summarizeTool(event);
       if (!shouldDisplayTool(label)) return;
       state.status = "调用工具";
+      state.stats.toolCallsStarted += 1;
+      markEvent(state);
       if (event?.toolCallId) {
         state.activeTools.set(event.toolCallId, { label, startedAt: Date.now() });
       }
@@ -507,6 +563,7 @@ export default {
       if (!parseFeishuDirectSessionKey(sessionKey)) return;
       const state = stateFor(states, sessionKey, ctx);
       state.status = "压缩上下文";
+      state.stats.compactions += 1;
       setCurrent(state, "compact", "summarizing context");
       await publish(api, states, ctx, event, { force: true });
     }, { timeoutMs: 10000 });
