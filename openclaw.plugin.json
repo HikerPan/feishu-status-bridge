@@ -1,6 +1,6 @@
 {
   "id": "feishu-status-bridge",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
@@ -61,22 +61,6 @@
         "type": "boolean",
         "default": true,
         "description": "Show a compact completion summary when the agent run ends."
-      },
-      "showActionButtons": {
-        "type": "boolean",
-        "default": false,
-        "description": "Show Feishu card buttons for refresh, summary, and hiding the status card. Disabled by default because Feishu Card JSON 2.0 rejects the legacy action container on some tenants."
-      },
-      "showStopButton": {
-        "type": "boolean",
-        "default": false,
-        "description": "Show a stop button that dispatches OpenClaw's built-in /stop command. Disabled by default because it can abort an active run."
-      },
-      "actionStateTtlMs": {
-        "type": "integer",
-        "minimum": 60000,
-        "default": 3600000,
-        "description": "How long finished run state is retained so action buttons such as summary still work."
       }
     }
   }

@@ -105,13 +105,7 @@ function resolveConfig(api, event) {
       1000,
       typeof cfg.stuckCheckIntervalMs === "number" ? cfg.stuckCheckIntervalMs : 10000
     ),
-    showFinalSummary: cfg.showFinalSummary !== false,
-    showActionButtons: cfg.showActionButtons === true,
-    showStopButton: cfg.showStopButton === true,
-    actionStateTtlMs: Math.max(
-      60000,
-      typeof cfg.actionStateTtlMs === "number" ? cfg.actionStateTtlMs : 60 * 60000
-    )
+    showFinalSummary: cfg.showFinalSummary !== false
   };
 }
 
@@ -548,51 +542,6 @@ function formatHistoryPanel(state) {
   };
 }
 
-function buildFeishuCardButton(params) {
-  return {
-    tag: "button",
-    text: {
-      tag: "plain_text",
-      content: params.label
-    },
-    type: params.type ?? "default",
-    value: {
-      text: params.command
-    }
-  };
-}
-
-function buildActionButtons(state) {
-  if (state.showActionButtons === false || state.hidden) return undefined;
-  const token = encodeActionToken(state.sessionKey);
-  const actions = [
-    buildFeishuCardButton({
-      label: "刷新状态",
-      type: "primary",
-      command: `/${COMMAND_NAME} refresh ${token}`
-    }),
-    buildFeishuCardButton({
-      label: "查看摘要",
-      command: `/${COMMAND_NAME} summary ${token}`
-    }),
-    buildFeishuCardButton({
-      label: "隐藏卡片",
-      command: `/${COMMAND_NAME} hide ${token}`
-    })
-  ];
-  if (state.showStopButton === true && state.terminal !== true) {
-    actions.push(buildFeishuCardButton({
-      label: "停止任务",
-      type: "danger",
-      command: "/stop"
-    }));
-  }
-  return {
-    tag: "action",
-    actions
-  };
-}
-
 function buildHiddenCard(state) {
   return {
     schema: "2.0",
@@ -725,7 +674,7 @@ function buildMarkdownStatus(state) {
   ].join("\n");
 }
 
-function buildStatusCard(state, options = {}) {
+function buildStatusCard(state) {
   if (state.hidden) return buildHiddenCard(state);
   const status = effectiveStatus(state);
   const title = statusTitle(status);
@@ -735,8 +684,6 @@ function buildStatusCard(state, options = {}) {
   }];
   const historyPanel = formatHistoryPanel(state);
   if (historyPanel) elements.push(historyPanel);
-  const actionButtons = options.omitActionButtons === true ? undefined : buildActionButtons(state);
-  if (actionButtons) elements.push(actionButtons);
 
   return {
     schema: "2.0",
@@ -780,29 +727,15 @@ function scheduleActiveToolMonitor(api, states, ctx, event, state, cfg) {
 async function upsertStatusMessage(api, state, openId) {
   const cfg = api.runtime.config.current();
   const { sendCardFeishu, editMessageFeishu } = await loadFeishuSendModule();
-  let card = buildStatusCard(state, { omitActionButtons: state.actionButtonsUnsupported === true });
+  const card = buildStatusCard(state);
 
   if (!state.messageId) {
-    let result;
-    try {
-      result = await sendCardFeishu({
-        cfg,
-        to: `user:${openId}`,
-        card,
-        accountId: "default"
-      });
-    } catch (error) {
-      if (!isUnsupportedActionCardError(error) || state.actionButtonsUnsupported === true) throw error;
-      state.actionButtonsUnsupported = true;
-      api.logger?.warn?.(`[${PLUGIN_ID}] Feishu Card 2.0 rejected action buttons; retrying without buttons.`);
-      card = buildStatusCard(state, { omitActionButtons: true });
-      result = await sendCardFeishu({
-        cfg,
-        to: `user:${openId}`,
-        card,
-        accountId: "default"
-      });
-    }
+    const result = await sendCardFeishu({
+      cfg,
+      to: `user:${openId}`,
+      card,
+      accountId: "default"
+    });
     state.messageId = result?.messageId;
     return;
   }
@@ -815,17 +748,6 @@ async function upsertStatusMessage(api, state, openId) {
       accountId: "default"
     });
   } catch (error) {
-    if (isUnsupportedActionCardError(error) && state.actionButtonsUnsupported !== true) {
-      state.actionButtonsUnsupported = true;
-      api.logger?.warn?.(`[${PLUGIN_ID}] Feishu Card 2.0 rejected action buttons; retrying edit without buttons.`);
-      await editMessageFeishu({
-        cfg,
-        messageId: state.messageId,
-        card: buildStatusCard(state, { omitActionButtons: true }),
-        accountId: "default"
-      });
-      return;
-    }
     api.logger?.warn?.(`[${PLUGIN_ID}] edit failed, sending a replacement status message: ${String(error)}`);
     state.messageId = undefined;
     const result = await sendCardFeishu({
@@ -836,11 +758,6 @@ async function upsertStatusMessage(api, state, openId) {
     });
     state.messageId = result?.messageId;
   }
-}
-
-function isUnsupportedActionCardError(error) {
-  const text = compactError(error);
-  return /unsupported tag action|schema V2 no longer support this capability|ErrCode:\s*200861/i.test(text);
 }
 
 async function publish(api, states, ctx, event, options = {}) {
@@ -860,9 +777,6 @@ async function publish(api, states, ctx, event, options = {}) {
   state.stuckThresholdMs = cfg.stuckThresholdMs;
   state.stuckCheckIntervalMs = cfg.stuckCheckIntervalMs;
   state.showFinalSummary = cfg.showFinalSummary;
-  state.showActionButtons = cfg.showActionButtons;
-  state.showStopButton = cfg.showStopButton;
-  state.actionStateTtlMs = cfg.actionStateTtlMs;
   const now = Date.now();
   const force = options.force === true || options.terminal === true || !state.messageId;
 
@@ -1040,11 +954,7 @@ export default {
       setCurrent(state, state.status === "完成" ? "done" : "error", event?.error ? summarizeError(event) : `total ${duration}`);
       state.terminal = true;
       await publish(api, states, ctx, event, { terminal: true });
-      if (state.showActionButtons === false) clearState(states, sessionKey);
-      else {
-        clearTimers(state);
-        scheduleStateCleanup(states, sessionKey, state.actionStateTtlMs ?? 60 * 60000);
-      }
+      clearState(states, sessionKey);
     }, { timeoutMs: 20000 });
 
     api.registerCommand({
