@@ -13,7 +13,9 @@ The display style is inspired by Hermes Agent: short, action-oriented, icon-led,
 - Shows the active phase under `📍 当前`.
 - Shows compact live counters under `📊 进度`.
 - Shows currently running tools under `🛠️ 活跃工具`.
-- Shows recent tool actions under `🧭 最近`, one action per line.
+- Shows recent tool actions in a native Feishu `🧭 详情` collapsible panel.
+- Marks long-running active tools as `可能卡住` after a configurable threshold.
+- Replaces the final card with a compact completion summary when the run ends.
 - Keeps all recent history rows by default for the current run, with an optional cap if you prefer shorter cards.
 - Adds icons for common tools such as terminal, web search, browser, image generation, memory, and Feishu docs.
 - Marks completed and failed tool calls with clear `✓` / `✗` indicators.
@@ -30,8 +32,8 @@ OpenClaw 调用工具 · 14s · openai-codex/gpt-5.5
 ⚡ tool: 🖥️ exec_command("npm test")
 🛠️ 活跃工具:
 ⏳ 🖥️ exec_command("npm test") · 4s
-🧭 最近:
-✅ 🔎 tavily_search("OpenClaw plugin hooks") (1.3s) ✓
+🧭 详情 (1)
+  ✅ 🔎 tavily_search("OpenClaw plugin hooks") (1.3s) ✓
 ```
 
 ## Requirements
@@ -111,10 +113,15 @@ systemctl --user restart openclaw-gateway.service
 | `includeToolNames` | `true` | Reserved for display customization. |
 | `showStats` | `true` | Shows compact model/tool/failure/update counters under `📊 进度`. |
 | `showActiveTools` | `true` | Shows currently running tool calls under `🛠️ 活跃工具`. |
+| `showDetailPanel` | `true` | Shows recent history in a native Feishu collapsible detail panel. |
+| `detailPanelExpanded` | `false` | Opens the detail panel by default when set to `true`. |
+| `stuckThresholdMs` | `60000` | Marks active tools as `可能卡住` after this many milliseconds. |
+| `stuckCheckIntervalMs` | `10000` | Refreshes active-tool elapsed time and stuck status while a tool is running. |
+| `showFinalSummary` | `true` | Shows a compact completion summary on the final status card. |
 
 The plugin only publishes cards for Feishu direct chats. Group chats and non-Feishu sessions are ignored.
 
-For very long tasks, consider setting `maxHistoryItems` to a positive number such as `20` or `50` to reduce Feishu card size.
+For very long tasks, consider setting `maxHistoryItems` to a positive number such as `20` or `50` to reduce Feishu card size. Set `showDetailPanel` to `false` if you prefer the older always-visible `🧭 最近` block.
 
 ## Runtime Discovery
 

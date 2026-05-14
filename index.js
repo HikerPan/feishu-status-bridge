@@ -55,7 +55,18 @@ function resolveConfig(api, event) {
     maxHistoryItems: Number.isInteger(cfg.maxHistoryItems) && cfg.maxHistoryItems > 0 ? cfg.maxHistoryItems : 0,
     includeToolNames: cfg.includeToolNames !== false,
     showStats: cfg.showStats !== false,
-    showActiveTools: cfg.showActiveTools !== false
+    showActiveTools: cfg.showActiveTools !== false,
+    showDetailPanel: cfg.showDetailPanel !== false,
+    detailPanelExpanded: cfg.detailPanelExpanded === true,
+    stuckThresholdMs: Math.max(
+      5000,
+      typeof cfg.stuckThresholdMs === "number" ? cfg.stuckThresholdMs : 60000
+    ),
+    stuckCheckIntervalMs: Math.max(
+      1000,
+      typeof cfg.stuckCheckIntervalMs === "number" ? cfg.stuckCheckIntervalMs : 10000
+    ),
+    showFinalSummary: cfg.showFinalSummary !== false
   };
 }
 
@@ -135,6 +146,7 @@ function stateFor(states, sessionKey, ctx = {}) {
       startedAt: Date.now(),
       lastUpdatedAt: 0,
       pendingTimer: undefined,
+      activeToolTimer: undefined,
       messageId: undefined,
       status: "运行中",
       model: undefined,
@@ -142,6 +154,7 @@ function stateFor(states, sessionKey, ctx = {}) {
       current: undefined,
       history: [],
       activeTools: new Map(),
+      finalSummary: undefined,
       stats: createStats(),
       sessionKey,
       runId: ctx.runId
@@ -277,7 +290,7 @@ function summarizeTool(event) {
 
 function formatStatus(state) {
   const header = [
-    `OpenClaw ${state.status}`,
+    `OpenClaw ${effectiveStatus(state)}`,
     compactElapsed(state.startedAt),
     state.model ? clip(state.model, 36) : undefined
   ].filter(Boolean);
@@ -295,9 +308,10 @@ function formatStatus(state) {
     header.join(" · "),
     state.objective ? `任务: ${clip(state.objective, 80)}` : undefined,
     statsLine,
+    state.finalSummary,
     currentLine,
     activeToolsBlock,
-    historyBlock
+    state.showDetailPanel === false ? historyBlock : undefined
   ].filter(Boolean).join("\n");
 }
 
@@ -313,14 +327,78 @@ function formatStats(state) {
   return `📊 进度: ${parts.join(" · ")}`;
 }
 
+function formatFinalSummary(state, duration) {
+  const stats = state.stats ?? createStats();
+  const icon = state.status === "完成" ? "✅" : "❌";
+  const parts = [
+    `总耗时 ${duration}`,
+    `模型 ${stats.modelCalls}`,
+    `工具 ${stats.toolsCompleted}/${stats.toolCallsStarted}`
+  ];
+  if (stats.toolsFailed > 0) parts.push(`失败 ${stats.toolsFailed}`);
+  if (stats.compactions > 0) parts.push(`压缩 ${stats.compactions}`);
+  const last = state.history.length ? `\n最后动作: ${formatTrailLine(state.history[state.history.length - 1])}` : "";
+  return `${icon} 完成摘要: ${parts.join(" · ")}${last}`;
+}
+
 function formatActiveTools(state) {
   if (!state.activeTools?.size) return undefined;
   const lines = [];
+  const now = Date.now();
+  const threshold = state.stuckThresholdMs ?? 60000;
   for (const tool of state.activeTools.values()) {
-    const elapsed = tool.startedAt ? compactElapsed(tool.startedAt) : "";
-    lines.push(`⏳ ${tool.label}${elapsed ? ` · ${elapsed}` : ""}`);
+    const elapsedMs = tool.startedAt ? now - tool.startedAt : 0;
+    const elapsed = tool.startedAt ? compactElapsed(tool.startedAt, now) : "";
+    const stuck = elapsedMs >= threshold;
+    lines.push(`${stuck ? "⚠️" : "⏳"} ${tool.label}${elapsed ? ` · ${elapsed}` : ""}${stuck ? " · 可能卡住" : ""}`);
   }
   return ["🛠️ 活跃工具:", ...lines].join("\n");
+}
+
+function hasStuckTools(state, now = Date.now()) {
+  if (!state.activeTools?.size) return false;
+  const threshold = state.stuckThresholdMs ?? 60000;
+  for (const tool of state.activeTools.values()) {
+    if (tool.startedAt && now - tool.startedAt >= threshold) return true;
+  }
+  return false;
+}
+
+function effectiveStatus(state) {
+  if (state.status === "调用工具" && hasStuckTools(state)) return "可能卡住";
+  return state.status;
+}
+
+function formatHistoryPanel(state) {
+  if (!state.history.length || state.showDetailPanel === false) return undefined;
+  return {
+    tag: "collapsible_panel",
+    expanded: state.detailPanelExpanded === true,
+    header: {
+      title: {
+        tag: "plain_text",
+        content: `🧭 详情 (${state.history.length})`
+      },
+      vertical_align: "center",
+      icon: {
+        tag: "standard_icon",
+        token: "down-small-ccm_outlined",
+        size: "16px 16px"
+      },
+      icon_position: "right",
+      icon_expanded_angle: -180
+    },
+    border: {
+      color: "grey",
+      corner_radius: "5px"
+    },
+    vertical_spacing: "8px",
+    padding: "8px 8px 8px 8px",
+    elements: [{
+      tag: "markdown",
+      content: state.history.map(formatTrailLine).join("\n")
+    }]
+  };
 }
 
 function completeTool(state, event, cfg) {
@@ -340,6 +418,7 @@ function completeTool(state, event, cfg) {
 }
 
 function statusTemplate(status) {
+  if (status === "可能卡住") return "yellow";
   if (status === "失败" || status === "工具报错") return "red";
   if (status === "完成") return "green";
   if (status === "调用工具") return "wathet";
@@ -352,6 +431,7 @@ function statusTitle(status) {
     "思考中": "Thinking",
     "调用工具": "Tool Running",
     "继续处理": "Working",
+    "可能卡住": "Possibly Stuck",
     "工具报错": "Tool Error",
     "压缩上下文": "Compacting",
     "恢复处理": "Resuming",
@@ -364,11 +444,16 @@ function statusTitle(status) {
 function resetTurnState(state) {
   state.startedAt = Date.now();
   state.lastUpdatedAt = 0;
+  if (state.pendingTimer) clearTimeout(state.pendingTimer);
+  if (state.activeToolTimer) clearTimeout(state.activeToolTimer);
+  state.pendingTimer = undefined;
+  state.activeToolTimer = undefined;
   state.messageId = undefined;
   state.status = "运行中";
   state.current = undefined;
   state.history = [];
   state.activeTools = new Map();
+  state.finalSummary = undefined;
   state.stats = createStats();
   state.objective = undefined;
 }
@@ -383,33 +468,60 @@ function noteModel(state, event, phase) {
 }
 
 function buildMarkdownStatus(state) {
+  const status = effectiveStatus(state);
   return [
-    `**${statusTitle(state.status)}**`,
+    `**${statusTitle(status)}**`,
     formatStatus(state)
   ].join("\n");
 }
 
 function buildStatusCard(state) {
-  const title = statusTitle(state.status);
+  const status = effectiveStatus(state);
+  const title = statusTitle(status);
+  const elements = [{
+    tag: "markdown",
+    content: buildMarkdownStatus(state)
+  }];
+  const historyPanel = formatHistoryPanel(state);
+  if (historyPanel) elements.push(historyPanel);
+
   return {
     schema: "2.0",
     config: {
       width_mode: "fill"
     },
     header: {
-      template: statusTemplate(state.status),
+      template: statusTemplate(status),
       title: {
         tag: "plain_text",
         content: title
       }
     },
     body: {
-      elements: [{
-        tag: "markdown",
-        content: buildMarkdownStatus(state)
-      }]
+      elements
     }
   };
+}
+
+function scheduleActiveToolMonitor(api, states, ctx, event, state, cfg) {
+  if (state.activeToolTimer) clearTimeout(state.activeToolTimer);
+  state.activeToolTimer = undefined;
+  if (!state.activeTools?.size) return;
+
+  const now = Date.now();
+  let nextDelay = cfg.stuckCheckIntervalMs;
+  for (const tool of state.activeTools.values()) {
+    if (!tool.startedAt) continue;
+    const untilStuck = cfg.stuckThresholdMs - (now - tool.startedAt);
+    if (untilStuck > 0) nextDelay = Math.min(nextDelay, untilStuck);
+  }
+  nextDelay = Math.max(1000, nextDelay);
+
+  state.activeToolTimer = setTimeout(() => {
+    publish(api, states, ctx, event, { force: true }).catch((error) => {
+      api.logger?.warn?.(`[${PLUGIN_ID}] active tool monitor publish failed: ${String(error)}`);
+    });
+  }, nextDelay);
 }
 
 async function upsertStatusMessage(api, state, openId) {
@@ -459,6 +571,11 @@ async function publish(api, states, ctx, event, options = {}) {
   const state = stateFor(states, sessionKey, ctx);
   state.showStats = cfg.showStats;
   state.showActiveTools = cfg.showActiveTools;
+  state.showDetailPanel = cfg.showDetailPanel;
+  state.detailPanelExpanded = cfg.detailPanelExpanded;
+  state.stuckThresholdMs = cfg.stuckThresholdMs;
+  state.stuckCheckIntervalMs = cfg.stuckCheckIntervalMs;
+  state.showFinalSummary = cfg.showFinalSummary;
   const now = Date.now();
   const force = options.force === true || options.terminal === true || !state.messageId;
 
@@ -479,6 +596,7 @@ async function publish(api, states, ctx, event, options = {}) {
   try {
     await upsertStatusMessage(api, state, openId);
     state.lastUpdatedAt = Date.now();
+    scheduleActiveToolMonitor(api, states, ctx, event, state, cfg);
   } catch (error) {
     api.logger?.warn?.(`[${PLUGIN_ID}] publish failed: ${String(error)}`);
   }
@@ -487,6 +605,7 @@ async function publish(api, states, ctx, event, options = {}) {
 function clearState(states, sessionKey) {
   const state = states.get(sessionKey);
   if (state?.pendingTimer) clearTimeout(state.pendingTimer);
+  if (state?.activeToolTimer) clearTimeout(state.activeToolTimer);
   states.delete(sessionKey);
 }
 
@@ -582,9 +701,12 @@ export default {
     api.on("agent_end", async (event, ctx) => {
       const sessionKey = ctx?.sessionKey ?? event?.sessionKey;
       if (!parseFeishuDirectSessionKey(sessionKey)) return;
+      const cfg = resolveConfig(api, event);
       const state = stateFor(states, sessionKey, ctx);
       state.status = event?.success === false ? "失败" : "完成";
       const duration = typeof event?.durationMs === "number" ? `${Math.round(event.durationMs / 1000)}s` : compactElapsed(state.startedAt);
+      state.activeTools.clear();
+      if (cfg.showFinalSummary !== false) state.finalSummary = formatFinalSummary(state, duration);
       setCurrent(state, state.status === "完成" ? "done" : "error", event?.error ? clip(event.error, 96) : `total ${duration}`);
       await publish(api, states, ctx, event, { terminal: true });
       clearState(states, sessionKey);

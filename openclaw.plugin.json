@@ -1,6 +1,6 @@
 {
   "id": "feishu-status-bridge",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
@@ -33,6 +33,33 @@
         "type": "boolean",
         "default": true,
         "description": "Show currently running tool calls while they are active."
+      },
+      "showDetailPanel": {
+        "type": "boolean",
+        "default": true,
+        "description": "Render recent history in a native Feishu collapsible detail panel."
+      },
+      "detailPanelExpanded": {
+        "type": "boolean",
+        "default": false,
+        "description": "Open the detail panel by default instead of starting collapsed."
+      },
+      "stuckThresholdMs": {
+        "type": "integer",
+        "minimum": 5000,
+        "default": 60000,
+        "description": "Mark active tools as possibly stuck after this many milliseconds."
+      },
+      "stuckCheckIntervalMs": {
+        "type": "integer",
+        "minimum": 1000,
+        "default": 10000,
+        "description": "Refresh active-tool elapsed time and stuck status at this interval."
+      },
+      "showFinalSummary": {
+        "type": "boolean",
+        "default": true,
+        "description": "Show a compact completion summary when the agent run ends."
       }
     }
   }
