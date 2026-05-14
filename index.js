@@ -106,7 +106,7 @@ function resolveConfig(api, event) {
       typeof cfg.stuckCheckIntervalMs === "number" ? cfg.stuckCheckIntervalMs : 10000
     ),
     showFinalSummary: cfg.showFinalSummary !== false,
-    showActionButtons: cfg.showActionButtons !== false,
+    showActionButtons: cfg.showActionButtons === true,
     showStopButton: cfg.showStopButton === true,
     actionStateTtlMs: Math.max(
       60000,
@@ -725,7 +725,7 @@ function buildMarkdownStatus(state) {
   ].join("\n");
 }
 
-function buildStatusCard(state) {
+function buildStatusCard(state, options = {}) {
   if (state.hidden) return buildHiddenCard(state);
   const status = effectiveStatus(state);
   const title = statusTitle(status);
@@ -735,7 +735,7 @@ function buildStatusCard(state) {
   }];
   const historyPanel = formatHistoryPanel(state);
   if (historyPanel) elements.push(historyPanel);
-  const actionButtons = buildActionButtons(state);
+  const actionButtons = options.omitActionButtons === true ? undefined : buildActionButtons(state);
   if (actionButtons) elements.push(actionButtons);
 
   return {
@@ -780,15 +780,29 @@ function scheduleActiveToolMonitor(api, states, ctx, event, state, cfg) {
 async function upsertStatusMessage(api, state, openId) {
   const cfg = api.runtime.config.current();
   const { sendCardFeishu, editMessageFeishu } = await loadFeishuSendModule();
-  const card = buildStatusCard(state);
+  let card = buildStatusCard(state, { omitActionButtons: state.actionButtonsUnsupported === true });
 
   if (!state.messageId) {
-    const result = await sendCardFeishu({
-      cfg,
-      to: `user:${openId}`,
-      card,
-      accountId: "default"
-    });
+    let result;
+    try {
+      result = await sendCardFeishu({
+        cfg,
+        to: `user:${openId}`,
+        card,
+        accountId: "default"
+      });
+    } catch (error) {
+      if (!isUnsupportedActionCardError(error) || state.actionButtonsUnsupported === true) throw error;
+      state.actionButtonsUnsupported = true;
+      api.logger?.warn?.(`[${PLUGIN_ID}] Feishu Card 2.0 rejected action buttons; retrying without buttons.`);
+      card = buildStatusCard(state, { omitActionButtons: true });
+      result = await sendCardFeishu({
+        cfg,
+        to: `user:${openId}`,
+        card,
+        accountId: "default"
+      });
+    }
     state.messageId = result?.messageId;
     return;
   }
@@ -801,6 +815,17 @@ async function upsertStatusMessage(api, state, openId) {
       accountId: "default"
     });
   } catch (error) {
+    if (isUnsupportedActionCardError(error) && state.actionButtonsUnsupported !== true) {
+      state.actionButtonsUnsupported = true;
+      api.logger?.warn?.(`[${PLUGIN_ID}] Feishu Card 2.0 rejected action buttons; retrying edit without buttons.`);
+      await editMessageFeishu({
+        cfg,
+        messageId: state.messageId,
+        card: buildStatusCard(state, { omitActionButtons: true }),
+        accountId: "default"
+      });
+      return;
+    }
     api.logger?.warn?.(`[${PLUGIN_ID}] edit failed, sending a replacement status message: ${String(error)}`);
     state.messageId = undefined;
     const result = await sendCardFeishu({
@@ -811,6 +836,11 @@ async function upsertStatusMessage(api, state, openId) {
     });
     state.messageId = result?.messageId;
   }
+}
+
+function isUnsupportedActionCardError(error) {
+  const text = compactError(error);
+  return /unsupported tag action|schema V2 no longer support this capability|ErrCode:\s*200861/i.test(text);
 }
 
 async function publish(api, states, ctx, event, options = {}) {
