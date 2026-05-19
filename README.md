@@ -48,7 +48,7 @@ OpenClaw 调用工具 · 14s · openai-codex/gpt-5.5
 - Node.js 20 or newer.
 - Feishu direct-chat session keys in the standard OpenClaw format.
 
-This plugin reuses OpenClaw's existing Feishu card send/edit runtime. It does not implement a separate Feishu SDK client.
+This plugin reuses OpenClaw's existing Feishu card send/update runtime. It does not implement a separate Feishu SDK client.
 
 ## Install
 
@@ -148,10 +148,14 @@ OpenClaw also has a built-in `/steer <message>` command for active runs. Feishu 
 
 Feishu Status Bridge searches for OpenClaw's Feishu card runtime in these locations:
 
+- `FEISHU_STATUS_BRIDGE_FEISHU_RUNTIME_FILE`
 - `FEISHU_STATUS_BRIDGE_FEISHU_DIST_DIR`
 - `~/.openclaw/npm/node_modules/@openclaw/feishu/dist`
-- `~/.npm-global/lib/node_modules/openclaw/dist`
+- `~/.openclaw/npm/node_modules/@openclaw/feishu`
 - `/opt/homebrew/lib/node_modules/openclaw/dist`
+- `~/.openclaw/extensions/openclaw-lark/index.js`
+- `~/.openclaw/extensions/openclaw-lark/src/messaging/outbound/send.js`
+- `~/.npm-global/lib/node_modules/openclaw/dist`
 - bundled OpenClaw runtimes under `~/.openclaw/extensions/*/node_modules`
 
 If your Feishu runtime is in a custom location, set:
@@ -196,7 +200,7 @@ Expected log line:
 
 ### `Cannot locate Feishu card runtime`
 
-Set `FEISHU_STATUS_BRIDGE_FEISHU_DIST_DIR` to the directory containing OpenClaw's Feishu `send-*.js` runtime file.
+Set `FEISHU_STATUS_BRIDGE_FEISHU_RUNTIME_FILE` to the exact module file if you need to override discovery, or `FEISHU_STATUS_BRIDGE_FEISHU_DIST_DIR` to a directory containing the runtime module.
 
 ### The card updates too frequently
 

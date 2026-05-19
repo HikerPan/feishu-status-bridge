@@ -136,43 +136,82 @@ function discoverBundledRuntimeDirs(home) {
   return dirs;
 }
 
+function collectRuntimeFiles(root) {
+  if (!root || !fs.existsSync(root)) return [];
+
+  const stat = fs.statSync(root);
+  if (stat.isFile()) return [root];
+
+  const files = [];
+  const directCandidates = [
+    path.join(root, "index.js"),
+    path.join(root, "src", "messaging", "outbound", "send.js")
+  ];
+  for (const file of directCandidates) {
+    if (fs.existsSync(file)) files.push(file);
+  }
+
+  for (const name of fs.readdirSync(root)) {
+    if (/^send-.*\.js$/.test(name)) {
+      files.push(path.join(root, name));
+    }
+  }
+  return files;
+}
+
+function discoverRuntimeFiles(home) {
+  const roots = [
+    process.env.FEISHU_STATUS_BRIDGE_FEISHU_RUNTIME_FILE,
+    process.env.FEISHU_STATUS_BRIDGE_FEISHU_DIST_DIR,
+    path.join(home, ".openclaw/npm/node_modules/@openclaw/feishu/dist"),
+    path.join(home, ".openclaw/npm/node_modules/@openclaw/feishu"),
+    "/opt/homebrew/lib/node_modules/openclaw/dist",
+    path.join(home, ".openclaw/extensions/openclaw-lark"),
+    path.join(home, ".openclaw/extensions/openclaw-lark/src/messaging/outbound"),
+    path.join(home, ".npm-global/lib/node_modules/openclaw/dist"),
+    ...discoverBundledRuntimeDirs(home)
+  ];
+
+  const files = [];
+  for (const root of roots) {
+    files.push(...collectRuntimeFiles(root));
+  }
+  return existingDirs(files);
+}
+
 async function loadFeishuSendModule() {
   if (!feishuSendModulePromise) {
     feishuSendModulePromise = (async () => {
       const home = os.homedir();
-      const candidateDirs = existingDirs([
-        process.env.FEISHU_STATUS_BRIDGE_FEISHU_DIST_DIR,
-        path.join(home, ".openclaw/npm/node_modules/@openclaw/feishu/dist"),
-        path.join(home, ".npm-global/lib/node_modules/openclaw/dist"),
-        "/opt/homebrew/lib/node_modules/openclaw/dist",
-        ...discoverBundledRuntimeDirs(home)
-      ]);
+      const candidateFiles = discoverRuntimeFiles(home);
 
       const tried = [];
-      for (const dir of candidateDirs) {
-        if (!fs.existsSync(dir)) continue;
-        const sendFiles = fs
-          .readdirSync(dir)
-          .filter((name) => /^send-.*\.js$/.test(name))
-          .map((name) => path.join(dir, name));
-
-        for (const file of sendFiles) {
-          tried.push(file);
-          const mod = await import(pathToFileURL(file).href);
-          const sendCardFeishu = typeof mod.sendCardFeishu === "function" ? mod.sendCardFeishu : mod.a;
-          const editMessageFeishu = typeof mod.editMessageFeishu === "function" ? mod.editMessageFeishu : mod.t;
-          if (
-            typeof sendCardFeishu === "function" &&
-            typeof editMessageFeishu === "function" &&
-            sendCardFeishu.name === "sendCardFeishu" &&
-            editMessageFeishu.name === "editMessageFeishu"
-          ) {
-            return { sendCardFeishu, editMessageFeishu };
-          }
+      for (const file of candidateFiles) {
+        tried.push(file);
+        let mod;
+        try {
+          mod = await import(pathToFileURL(file).href);
+        } catch {
+          continue;
+        }
+        const sendCardFeishu = typeof mod.sendCardFeishu === "function" ? mod.sendCardFeishu : mod.a;
+        const updateCardFeishu =
+          typeof mod.updateCardFeishu === "function" ? mod.updateCardFeishu :
+          typeof mod.editMessageFeishu === "function" ? mod.editMessageFeishu :
+          typeof mod.u === "function" && mod.u.name === "updateCardFeishu" ? mod.u :
+          typeof mod.t === "function" && mod.t.name === "editMessageFeishu" ? mod.t :
+          undefined;
+        if (
+          typeof sendCardFeishu === "function" &&
+          typeof updateCardFeishu === "function" &&
+          sendCardFeishu.name === "sendCardFeishu" &&
+          (updateCardFeishu.name === "updateCardFeishu" || updateCardFeishu.name === "editMessageFeishu")
+        ) {
+          return { sendCardFeishu, updateCardFeishu };
         }
       }
 
-      throw new Error(`Cannot locate Feishu card runtime. Tried ${tried.length ? tried.join(", ") : candidateDirs.join(", ")}`);
+      throw new Error(`Cannot locate Feishu card runtime. Tried ${tried.length ? tried.join(", ") : candidateFiles.join(", ")}`);
     })();
   }
   return feishuSendModulePromise;
@@ -726,7 +765,7 @@ function scheduleActiveToolMonitor(api, states, ctx, event, state, cfg) {
 
 async function upsertStatusMessage(api, state, openId) {
   const cfg = api.runtime.config.current();
-  const { sendCardFeishu, editMessageFeishu } = await loadFeishuSendModule();
+  const { sendCardFeishu, updateCardFeishu } = await loadFeishuSendModule();
   const card = buildStatusCard(state);
 
   if (!state.messageId) {
@@ -741,22 +780,27 @@ async function upsertStatusMessage(api, state, openId) {
   }
 
   try {
-    await editMessageFeishu({
+    await updateCardFeishu({
       cfg,
       messageId: state.messageId,
       card,
       accountId: "default"
     });
   } catch (error) {
-    api.logger?.warn?.(`[${PLUGIN_ID}] edit failed, sending a replacement status message: ${String(error)}`);
-    state.messageId = undefined;
-    const result = await sendCardFeishu({
-      cfg,
-      to: `user:${openId}`,
-      card,
-      accountId: "default"
-    });
-    state.messageId = result?.messageId;
+    if (error?.name === "MessageUnavailableError") {
+      api.logger?.warn?.(`[${PLUGIN_ID}] card no longer available, sending a replacement status message: ${String(error)}`);
+      state.messageId = undefined;
+      const result = await sendCardFeishu({
+        cfg,
+        to: `user:${openId}`,
+        card,
+        accountId: "default"
+      });
+      state.messageId = result?.messageId;
+      return;
+    }
+
+    api.logger?.warn?.(`[${PLUGIN_ID}] card update failed, keeping the existing card: ${String(error)}`);
   }
 }
 

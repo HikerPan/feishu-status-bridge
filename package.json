@@ -1,6 +1,6 @@
 {
   "name": "feishu-status-bridge",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "private": true,
   "type": "module",
   "description": "OpenClaw plugin that shows live agent progress in Feishu direct chats.",
