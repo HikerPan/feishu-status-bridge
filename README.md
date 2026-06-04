@@ -6,6 +6,19 @@ Feishu Status Bridge creates one compact interactive card when an OpenClaw agent
 
 The display style is inspired by Hermes Agent: short, action-oriented, icon-led, and easy to scan on mobile.
 
+## Project Status
+
+Feishu Status Bridge is an early-stage public OpenClaw plugin maintained for real Feishu/Lark agent workflows. It is dependency-free, MIT-licensed, and currently distributed as a Git-installed OpenClaw extension.
+
+- Current version: `0.4.3`
+- Runtime: Node.js 20 or newer
+- Scope: Feishu/Lark direct chats started through OpenClaw
+- Maintenance docs: [changelog](CHANGELOG.md), [roadmap](ROADMAP.md), [security policy](SECURITY.md), and [contributing guide](CONTRIBUTING.md)
+
+## Why This Exists
+
+Long-running AI-agent tasks can be hard to trust from a chat interface: users need to know whether the agent is reading, calling tools, stuck, failing, or done. This plugin makes that state visible inside Feishu direct chats without spamming the conversation. It is especially useful for teams experimenting with OpenClaw as a remote coding or automation interface.
+
 ## Features
 
 - Live Feishu status card per agent run.

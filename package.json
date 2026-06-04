@@ -4,6 +4,23 @@
   "private": true,
   "type": "module",
   "description": "OpenClaw plugin that shows live agent progress in Feishu direct chats.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/HikerPan/feishu-status-bridge.git"
+  },
+  "bugs": {
+    "url": "https://github.com/HikerPan/feishu-status-bridge/issues"
+  },
+  "homepage": "https://github.com/HikerPan/feishu-status-bridge#readme",
+  "keywords": [
+    "openclaw",
+    "feishu",
+    "lark",
+    "agent",
+    "status-card",
+    "codex"
+  ],
   "scripts": {
     "test": "node --check index.js"
   },
