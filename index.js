@@ -64,7 +64,7 @@ function redactSensitive(value) {
   text = text.replace(/\b(glpat-[A-Za-z0-9_-]{8,})\b/g, "glpat-[redacted]");
   text = text.replace(/\b(Bearer\s+)[A-Za-z0-9._~+/=-]{8,}/gi, "$1[redacted]");
   text = text.replace(
-    /\b((?:OPENAI_API_KEY|ANTHROPIC_API_KEY|GOOGLE_API_KEY|GITHUB_TOKEN|GH_TOKEN|FEISHU_APP_SECRET|LARK_APP_SECRET|API_KEY|TOKEN|PASSWORD|PASSWD|SECRET)\s*=\s*)(?:"[^"]*"|'[^']*'|[^\s]+)/gi,
+    /(?<![?&])\b((?:OPENAI_API_KEY|ANTHROPIC_API_KEY|GOOGLE_API_KEY|GITHUB_TOKEN|GH_TOKEN|FEISHU_APP_SECRET|LARK_APP_SECRET|API_KEY|TOKEN|PASSWORD|PASSWD|SECRET)\s*=\s*)(?:"[^"]*"|'[^']*'|[^\s]+)/gi,
     "$1[redacted]"
   );
   text = text.replace(
@@ -895,6 +895,8 @@ async function handleCommand(api, states, ctx) {
 
   return { text: COMMAND_USAGE };
 }
+
+export { redactSensitive };
 
 export default {
   id: PLUGIN_ID,
