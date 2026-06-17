@@ -22,7 +22,7 @@
     "codex"
   ],
   "scripts": {
-    "test": "node --check index.js"
+    "test": "node --check index.js && node --test test/*.test.js"
   },
   "engines": {
     "node": ">=20"
